@@ -262,3 +262,4 @@ FROM Sales_SalesOrderHeader AS SOH2
 WHERE SOH2.CustomerID = SOH.CustomerID
 )
 ORDER BY CustomerName, SOH.TotalDue DESC;
+
