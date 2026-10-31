@@ -21,34 +21,45 @@ HAVING SUM(soh.TotalDue) > (
 )
 ORDER BY CustomerRevenue DESC;
 
+
 /*
 2. Which finished goods have on-hand inventory below the average total
 inventory held per stocked product?
 */
 
 SELECT
- PP.ProductID,
- PP.Name AS ProductName,
- PPC.Name AS CategoryName,
- SUM(COALESCE(PPI.Quantity, 0)) AS OnHandQuantity
+    PP.ProductID,
+    PP.Name AS ProductName,
+    PPC.Name AS CategoryName,
+    SUM(
+        CASE
+            WHEN PPI.Quantity IS NULL THEN 0
+            ELSE PPI.Quantity
+        END
+    ) AS OnHandQuantity
 FROM Production_Product AS PP
 LEFT JOIN Production_ProductInventory AS PPI
- ON PPI.ProductID = PP.ProductID
-LEFT JOIN Production_ProductSubcategory AS PSC
- ON PSC.ProductSubcategoryID = PP.ProductSubcategoryID
+    ON PPI.ProductID = PP.ProductID
+LEFT JOIN Production_ProductSubcategory AS PPS
+    ON PPS.ProductSubcategoryID = PP.ProductSubcategoryID
 LEFT JOIN Production_ProductCategory AS PPC
- ON PPC.ProductCategoryID = PSC.ProductCategoryID
+    ON PPC.ProductCategoryID = PPS.ProductCategoryID
 WHERE PP.FinishedGoodsFlag = 1
 GROUP BY PP.ProductID, PP.Name, PPC.Name
-HAVING SUM(COALESCE(PPI.Quantity, 0)) < (
- SELECT AVG(stock_totals.TotalQuantity)
- FROM (
- SELECT SUM(Quantity) AS TotalQuantity
- FROM Production_ProductInventory
- GROUP BY ProductID
- ) AS stock_totals
+HAVING SUM(
+    CASE
+        WHEN PPI.Quantity IS NULL THEN 0
+        ELSE PPI.Quantity
+    END
+) < (SELECT AVG(PPIST.TotalQuantity)
+    FROM (
+        SELECT
+            SUM(PPI2.Quantity) AS TotalQuantity
+        FROM Production_ProductInventory AS PPI2
+        GROUP BY PPI2.ProductID) AS PPIST
 )
 ORDER BY OnHandQuantity, ProductName;
+
 
 /*
 3. Which customer accounts have never placed a sales order?
@@ -73,6 +84,7 @@ WHERE SOH.SalesOrderID IS NULL
  WHERE SSOH.CustomerID IS NOT NULL
  )
 ORDER BY CustomerName, SC.CustomerID;
+
 
 /*
 4. Which sales territories have total order revenue above the average
@@ -100,6 +112,7 @@ HAVING SUM(SOH.TotalDue) > (
 )     
 ORDER BY TerritoryRevenue DESC;
 
+
 /*
 5. Which salespeople are below the average SalesYTD for their assigned
 territory?
@@ -115,13 +128,14 @@ FROM Sales_SalesPerson AS SSP
 INNER JOIN Person_Person AS PP
  ON PP.BusinessEntityID = SSP.BusinessEntityID
 INNER JOIN Sales_SalesTerritory AS SST
- ON SSP.TerritoryID = SSP.TerritoryID
+ ON SST.TerritoryID = SSP.TerritoryID
 WHERE SSP.SalesYTD < (
  SELECT AVG(SSP2.SalesYTD)
  FROM Sales_SalesPerson AS SSP2
  WHERE SSP2.TerritoryID = SSP.TerritoryID
 )
 ORDER BY SST.Name, SSP.SalesYTD;
+
 
 /*
 6. Which product offers have a discount percentage above the average
@@ -152,6 +166,7 @@ WHERE P2.ProductSubcategoryID = PP.ProductSubcategoryID
 )
 ORDER BY PSC.Name, SSO.DiscountPct DESC, PP.Name;
 
+
 /*
 7. Which vendor-product pairs have a standard purchase price above the
 average supplier price for that same product?
@@ -176,6 +191,7 @@ WHERE PPV2.ProductID = PPV.ProductID
 )
 ORDER BY PP.Name, PPV.StandardPrice DESC;
 
+
 /*
 8. Which pending or approved purchase orders exceed the average open
 purchase-order subtotal for their vendor?
@@ -199,6 +215,7 @@ WHERE POH2.VendorID = POH.VendorID
 AND POH2.Status IN (1, 2)
 )
 ORDER BY PV.Name, POH.SubTotal DESC;
+
 
 /*
 9. Which employees have a current hourly rate above the current average
@@ -240,6 +257,7 @@ WHERE EPH3.BusinessEntityID = EPH2.BusinessEntityID
 )
 ORDER BY HRD.Name, CurrentHourlyRate DESC;
 
+
 /*
 10. Which individual-customer orders are larger than that customer's average
 order value?
@@ -263,3 +281,140 @@ WHERE SOH2.CustomerID = SOH.CustomerID
 )
 ORDER BY CustomerName, SOH.TotalDue DESC;
 
+
+/*
+11. Which currently sellable products have never appeared on a sales-order line?
+*/
+
+SELECT
+    PP.ProductID,
+    PP.Name AS ProductName,
+    PP.ProductNumber,
+    PP.ListPrice
+FROM Production_Product AS PP
+LEFT JOIN Sales_SalesOrderDetail AS SSOD
+    ON SSOD.ProductID = PP.ProductID
+WHERE PP.SellEndDate IS NULL
+    AND SSOD.SalesOrderID IS NULL
+    AND PP.ProductID NOT IN (
+        SELECT SSOD2.ProductID
+        FROM Sales_SalesOrderDetail AS SSOD2
+        WHERE SSOD2.ProductID IS NOT NULL
+    )
+ORDER BY PP.Name;
+
+
+/*
+12. Which sales orders have freight charges above the average freight
+charge for their territory?
+*/
+
+/*
+12. Which sales orders have freight charges above the average freight
+charge for their territory?
+*/
+
+SELECT
+    SOH.SalesOrderID,
+    SOH.OrderDate,
+    SST.Name AS TerritoryName,
+    SOH.Freight,
+    SOHTA.AverageTerritoryFreight,
+    SOH.TotalDue
+FROM Sales_SalesOrderHeader AS SOH
+INNER JOIN Sales_SalesTerritory AS SST
+    ON SST.TerritoryID = SOH.TerritoryID
+INNER JOIN (
+    SELECT
+        SOH2.TerritoryID,
+        AVG(SOH2.Freight) AS AverageTerritoryFreight
+    FROM Sales_SalesOrderHeader AS SOH2
+    WHERE SOH2.TerritoryID IS NOT NULL
+    GROUP BY SOH2.TerritoryID
+) AS SOHTA
+    ON SOHTA.TerritoryID = SOH.TerritoryID
+WHERE SOH.Freight > SOHTA.AverageTerritoryFreight
+ORDER BY SST.Name, SOH.Freight DESC;
+
+/*
+13. Which sales-order lines were sold below the average list price
+for the product's subcategory?
+*/
+
+SELECT
+    SSOD.SalesOrderID,
+    SSOD.SalesOrderDetailID,
+    PP.Name AS ProductName,
+    PPS.Name AS SubcategoryName,
+    SSOD.OrderQty,
+    SSOD.UnitPrice,
+    PP.ListPrice
+FROM Sales_SalesOrderDetail AS SSOD
+INNER JOIN Production_Product AS PP
+    ON PP.ProductID = SSOD.ProductID
+INNER JOIN Production_ProductSubcategory AS PPS
+    ON PPS.ProductSubcategoryID = PP.ProductSubcategoryID
+WHERE SSOD.UnitPrice < (
+    SELECT AVG(PP2.ListPrice)
+    FROM Production_Product AS PP2
+    WHERE PP2.ProductSubcategoryID = PP.ProductSubcategoryID
+        AND PP2.ListPrice > 0
+)
+ORDER BY PPS.Name, SSOD.UnitPrice, PP.Name;
+
+
+/*
+14. Which manufacturing routing operations have actual costs above the
+average actual cost for the same product?
+*/
+
+SELECT
+    PWO.WorkOrderID,
+    PP.ProductID,
+    PP.Name AS ProductName,
+    PWOR.OperationSequence,
+    PWO.OrderQty,
+    PWOR.ActualResourceHrs,
+    PWOR.ActualCost,
+    PWORAC.AverageActualCost
+FROM Production_WorkOrder AS PWO
+INNER JOIN Production_WorkOrderRouting AS PWOR
+    ON PWOR.WorkOrderID = PWO.WorkOrderID
+    AND PWOR.ProductID = PWO.ProductID
+INNER JOIN Production_Product AS PP
+    ON PP.ProductID = PWO.ProductID
+INNER JOIN (
+    SELECT
+        PWOR2.ProductID,
+        AVG(PWOR2.ActualCost) AS AverageActualCost
+    FROM Production_WorkOrderRouting AS PWOR2
+    GROUP BY PWOR2.ProductID
+) AS PWORAC
+    ON PWORAC.ProductID = PWOR.ProductID
+WHERE PWOR.ActualCost > PWORAC.AverageActualCost
+ORDER BY PWOR.ActualCost DESC;
+
+
+/*
+15. Which products have a current list price above their average
+historical list price?
+*/
+
+SELECT DISTINCT
+    PP.ProductID,
+    PP.Name AS ProductName,
+    PP.ListPrice AS CurrentListPrice,
+    (
+        SELECT AVG(PPLPH2.ListPrice)
+        FROM Production_ProductListPriceHistory AS PPLPH2
+        WHERE PPLPH2.ProductID = PP.ProductID
+    ) AS AverageHistoricalListPrice
+FROM Production_Product AS PP
+INNER JOIN Production_ProductListPriceHistory AS PPLPH
+    ON PPLPH.ProductID = PP.ProductID
+WHERE PP.ListPrice > (
+    SELECT AVG(PPLPH3.ListPrice)
+    FROM Production_ProductListPriceHistory AS PPLPH3
+    WHERE PPLPH3.ProductID = PP.ProductID
+)
+ORDER BY PP.ListPrice DESC, PP.Name;
